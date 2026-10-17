@@ -1,0 +1,8 @@
+build/
+installer/Output/
+*.obj
+*.exp
+*.lib
+*.wav
+*.log
+installer/brand/src/*.ttf
