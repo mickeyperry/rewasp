@@ -1,4 +1,4 @@
-# ReWasp installer logic (run by ReWasp-Setup.exe as administrator; also usable by hand).
+﻿# ReWasp installer logic (run by ReWasp-Setup.exe as administrator; also usable by hand).
 #
 #   install    put ReWasp into every 64-bit FL Studio that has Image-Line's "no 64 bit
 #              version" placeholder Wasp_x64.dll, using the original 32-bit Wasp.dll
@@ -63,12 +63,21 @@ function Get-FLFolders {
     $dirs | Where-Object { Test-Path $_ } | Sort-Object -Unique
 }
 
+# Wasp builds from FL Studio 12 and older (file version 1.3.52 or lower) work, and need their Artwork
+# folder. FL Studio 20's build (1.3.53+) crashes in the helper (it expects newer host features), so it
+# isn't used, even if someone has copied an Artwork folder next to it.
+function Test-UsableWasp($file) {
+    if (-not (Test-Path (Join-Path $file.DirectoryName 'Artwork'))) { return $false }
+    try { $v = [version]$file.VersionInfo.FileVersion } catch { return $false }
+    return $v -lt [version]'1.3.53'
+}
+
 function Find-WaspSource {
     if ($WaspDll) {
         if (-not (Test-Path $WaspDll)) { Say "Not found: $WaspDll"; return $null }
         if (-not (Test-Is32BitPE $WaspDll)) { Say "Not a 32-bit plugin: $WaspDll"; return $null }
-        if (-not (Test-Path (Join-Path (Split-Path $WaspDll) 'Artwork'))) {
-            Say "No Artwork folder next to $WaspDll. Use the Wasp from FL Studio 12 or older (FL Studio 20's isn't supported yet)."
+        if (-not (Test-UsableWasp (Get-Item $WaspDll))) {
+            Say "$WaspDll can't be used. Use the Wasp from FL Studio 12 or older, with its Artwork folder next to it (FL Studio 20's isn't supported yet)."
             return $null
         }
         return (Resolve-Path $WaspDll).Path
@@ -77,9 +86,7 @@ function Find-WaspSource {
         $p = "$fl\Plugins\Fruity\Generators\Wasp\Wasp.dll"
         if ((Test-Path $p) -and (Test-Is32BitPE $p) -and -not (Test-FileHas $p $Placeholder)) { Get-Item $p }
     }
-    # Wasp builds from FL Studio 12 and older come with an Artwork folder and work. FL Studio 20's
-    # build has none and crashes in the helper (it expects newer host features), so it isn't used.
-    $usable = $found | Where-Object { Test-Path (Join-Path $_.DirectoryName 'Artwork') }
+    $usable = $found | Where-Object { Test-UsableWasp $_ }
     $best = $usable | Sort-Object LastWriteTime -Descending | Select-Object -First 1   # newest usable build
     if ($best) { return $best.FullName }
     if ($found) { Say "Found only FL Studio 20's Wasp ($($found[0].FullName)), which ReWasp doesn't support yet." }
@@ -113,6 +120,10 @@ try {
                 else { Remove-Item $target -Force; Say "Removed: $target" }
             }
             if (Test-Path "$dir\x86\WaspHost32.exe") { Remove-Item "$dir\x86" -Recurse -Force; Say "Removed: $dir\x86" }
+        }
+        $artRecords = Join-Path $Backup 'artwork.txt'
+        if (Test-Path $artRecords) {
+            foreach ($art in Get-Content $artRecords) { if (Test-Path $art) { Remove-Item $art -Recurse -Force; Say "Removed: $art" } }
         }
         Say 'ReWasp removed.'
         exit 0
@@ -154,6 +165,21 @@ try {
         Say "Installed into $(Split-Path $fl -Leaf)"
         $done += $dir
     }
+    # Wasp folders without Wasp's images (e.g. some FL Studio 20 installs) make Wasp show
+    # "Cannot open file ...\Wasp\Artwork\Back.bmp" and a blank purple window: add them.
+    $artRecords = Join-Path $Backup 'artwork.txt'
+    $artAdded = @()
+    if (Test-Path "$srcDir\Artwork") {
+        foreach ($fl in Get-FLFolders) {
+            $dir = "$fl\Plugins\Fruity\Generators\Wasp"
+            if (-not (Test-Path $dir) -or (Test-Path "$dir\Artwork")) { continue }
+            Copy-Item "$srcDir\Artwork" "$dir\" -Recurse -Force
+            Say "Added Wasp's images to $(Split-Path $fl -Leaf)"
+            $artAdded += "$dir\Artwork"
+        }
+    }
+    if ($artAdded) { $artAdded + $(if (Test-Path $artRecords) { Get-Content $artRecords } else { @() }) | Sort-Object -Unique | Set-Content $artRecords }
+
     if (-not $done) {
         Say 'No 64-bit FL Studio with the Wasp placeholder was found (FL Studio 12 or newer).'
         exit 4
